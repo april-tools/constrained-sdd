@@ -110,6 +110,12 @@ def download_sdd_data(folder: str = "data/sdd"):
     r = requests.get(url)
     z = zipfile.ZipFile(io.BytesIO(r.content))
     z.extractall(folder)
+    # move files from sdd folder to folder
+    import shutil
+
+    for f in os.listdir(f"{folder}/sdd"):
+        shutil.move(f"{folder}/sdd/{f}", f"{folder}/{f}")
+    os.rmdir(f"{folder}/sdd")
 
 
 class ConstrainedStanfordDroneDataset:
@@ -120,7 +126,7 @@ class ConstrainedStanfordDroneDataset:
         sdd_data_path: str = "data/sdd",
         dequantized: bool = True,
         filter_moving: bool = True,
-        download=False,
+        download=True,
     ):
         self.img_id = img_id
         self.constraint_classes = constraint_classes
