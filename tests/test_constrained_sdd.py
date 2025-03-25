@@ -10,6 +10,7 @@ def test_download_sdd_data():
 
 
 def test_download_and_load_sdd_data():
-    folder = tempfile.mkdtemp()
+    folder = "data/sdd"
     sdd = csdd.ConstrainedStanfordDroneDataset(0, sdd_data_path=folder, download=True)
     assert sdd.polygons is not None
+    sdd.get_dataset()

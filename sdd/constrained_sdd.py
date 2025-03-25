@@ -182,7 +182,7 @@ class ConstrainedStanfordDroneDataset:
     def get_dataset(
         self,
     ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-        trajectories = self.get_trajectories()
+        trajectories = list(self.get_trajectories().items())
         # Define the split percentages
         train_size = 0.7
         val_size = 0.15
