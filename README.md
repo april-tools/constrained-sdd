@@ -1,4 +1,5 @@
 # Constrained-SDD
+[![Python application](https://github.com/april-tools/constrained-sdd/actions/workflows/python-app.yml/badge.svg)](https://github.com/april-tools/constrained-sdd/actions/workflows/python-app.yml)
 This repository contains an annotated version of the Stanford Drone Dataset[1]. We segmented the first 50 images from SDD and drew polygons for buildings, obstacles and offroad. Our trajectories only follow the roads/walking paths.
 
 ## Citation
