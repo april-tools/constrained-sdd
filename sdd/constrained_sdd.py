@@ -1,12 +1,13 @@
 import pickle
 import numpy as np
 from sklearn.model_selection import train_test_split
+import os
 
 OBSTACLES_CLASSES = ["Building", "Obstacle"]
 OFFROAD_CLASSES = ["Offroad"]
 
 
-class PolytopeH():
+class PolytopeH:
     """
     Represents a polytope in H-representation, defined by a set of linear inequalities.
 
@@ -19,23 +20,25 @@ class PolytopeH():
                         and n is the dimensionality of the space.
         b (np.ndarray): The constant vector of shape (m,), corresponding to the right-hand side of the inequalities.
     """
+
     def __init__(self, A: np.ndarray, b: np.ndarray):
         self.A = A
         self.b = b
 
 
-class DNF():
+class DNF:
     """
     Represents a Disjunctive Normal Form (DNF) consisting of a list of polytopes.
 
     Attributes:
         polytopes (list[PolytopeH]): A list of PolytopeH objects that define the DNF.
     """
+
     def __init__(self, polytopes: list[PolytopeH]):
         self.polytopes = polytopes
 
 
-class PolygonV():
+class PolygonV:
     """
     A class representing a polygon defined by its vertices.
 
@@ -43,57 +46,93 @@ class PolygonV():
         vertices (np.ndarray): A NumPy array containing the vertices of the polygon.
                                 Each vertex is typically represented as a coordinate pair (x, y).
     """
+
     def __init__(self, vertices: np.ndarray):
         self.vertices = vertices
 
 
 ################# helpers ####
 
-def filter_moving_trajectories(trajectories: dict[str, np.ndarray],
-                               threshold_variance: float = 20,
-                               threshold_speed: float = 0.1,
-                               speed_window: int = 10) -> dict[str, np.ndarray]:
+
+def filter_moving_trajectories(
+    trajectories: dict[str, np.ndarray],
+    threshold_variance: float = 20,
+    threshold_speed: float = 0.1,
+    speed_window: int = 10,
+) -> dict[str, np.ndarray]:
     """
     Returns the trajectories that are moving, so trajectories that travel from its mean
     and with elements that have a speed greater than a threshold.
     """
+
     def to_non_stationary_trajectory(t: np.ndarray, threshold, windows_size=10):
         # calculate speed
         speed = np.linalg.norm(np.diff(t, axis=0), axis=1)
         # pad at the start to keep the same size
         # reuse the first value
-        speed = np.pad(speed, (1, 0), mode='constant', constant_values=speed[0])
+        speed = np.pad(speed, (1, 0), mode="constant", constant_values=speed[0])
         # smooth it
-        speed_smooth = np.convolve(speed, np.ones(windows_size)/windows_size, mode='same')
+        speed_smooth = np.convolve(
+            speed, np.ones(windows_size) / windows_size, mode="same"
+        )
 
         moving = speed_smooth > threshold
         t_non_stationary = t[moving, :]
         # print(t_non_stationary.shape)
         return t_non_stationary
 
-    all_moving = {t_id: t
-                  for t_id, t in trajectories.items()
-                  if np.var(t, axis=0).sum() > threshold_variance}
+    all_moving = {
+        t_id: t
+        for t_id, t in trajectories.items()
+        if np.var(t, axis=0).sum() > threshold_variance
+    }
 
-    all_moving_non_stationary = {t_id: to_non_stationary_trajectory(t, threshold_speed, speed_window)
-                                 for t_id, t in all_moving.items()}
+    all_moving_non_stationary = {
+        t_id: to_non_stationary_trajectory(t, threshold_speed, speed_window)
+        for t_id, t in all_moving.items()
+    }
 
     return all_moving_non_stationary
 
+
 ################# dataset ####
 
-class ConstrainedStanfordDroneDataset():
-    def __init__(self,
-                 img_id: int,
-                 constraint_classes: list[str] = OBSTACLES_CLASSES + OFFROAD_CLASSES,
-                 sdd_data_path: str = "data/sdd",
-                 dequantized: bool = True,
-                 filter_moving: bool = True,
-                 ):
+
+def download_sdd_data(folder: str = "data/sdd"):
+    # download github release
+    import requests
+    import zipfile
+    import io
+
+    url = (
+        "https://github.com/april-tools/constrained-sdd/releases/download/data/sdd.zip"
+    )
+    r = requests.get(url)
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall(folder)
+
+
+class ConstrainedStanfordDroneDataset:
+    def __init__(
+        self,
+        img_id: int,
+        constraint_classes: list[str] = OBSTACLES_CLASSES + OFFROAD_CLASSES,
+        sdd_data_path: str = "data/sdd",
+        dequantized: bool = True,
+        filter_moving: bool = True,
+        download=False,
+    ):
         self.img_id = img_id
         self.constraint_classes = constraint_classes
         self.sdd_data_path = sdd_data_path
         self.filter_moving = filter_moving
+
+        if download:
+            if not os.path.exists(sdd_data_path):
+                os.makedirs(sdd_data_path)
+            if not os.path.exists(f"{sdd_data_path}/all_images.pkl"):
+                print("Downloading SDD data")
+                download_sdd_data(sdd_data_path)
 
         with open(f"{sdd_data_path}/all_images.pkl", "rb") as f:
             self.all_images = pickle.load(f)
@@ -116,18 +155,27 @@ class ConstrainedStanfordDroneDataset():
         ]
 
         with open(f"{sdd_data_path}/polygons.pkl", "rb") as f:
-            self.polygons = pickle.load(f)
+            self.all_polygons = pickle.load(f)
+        self.polygons = self.all_polygons[img_id]
 
     def get_image(self):
         return self.image
-  
+
     def get_trajectories(self):
         trajectories = self.trajectories
         if self.filter_moving:
-            trajectories = list(filter_moving_trajectories(dict(trajectories),).items())
+            trajectories = dict(
+                list(
+                    filter_moving_trajectories(
+                        dict(trajectories),
+                    ).items()
+                )
+            )
         return trajectories
-    
-    def get_dataset(self) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+
+    def get_dataset(
+        self,
+    ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
         trajectories = self.get_trajectories()
         # Define the split percentages
         train_size = 0.7

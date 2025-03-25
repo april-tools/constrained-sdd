@@ -1,1 +1,4 @@
 data
+.vscode
+sdd/__pycache__
+tests/__pycache__
