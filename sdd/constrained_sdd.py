@@ -1,7 +1,12 @@
+import math
 import pickle
+from typing import Literal, Union
 import numpy as np
 from sklearn.model_selection import train_test_split
 import os
+import torch
+from torch.utils.data import TensorDataset
+from torch.utils.data import Dataset
 
 OBSTACLES_CLASSES = ["Building", "Obstacle"]
 OFFROAD_CLASSES = ["Offroad"]
@@ -25,6 +30,18 @@ class PolytopeH:
         self.A = A
         self.b = b
 
+    def rescale(self, scale: float):
+        """
+        Rescales the polytope by a given factor.
+
+        Args:
+            scale (float): The scaling factor.
+        """
+        # such that A * x = A' * (x * scale)
+        # A' = A / scale
+
+        self.A = self.A / scale
+
 
 class DNF:
     """
@@ -38,7 +55,7 @@ class DNF:
         self.polytopes = polytopes
 
 
-class PolygonV:
+class PolytopeV:
     """
     A class representing a polygon defined by its vertices.
 
@@ -49,6 +66,16 @@ class PolygonV:
 
     def __init__(self, vertices: np.ndarray):
         self.vertices = vertices
+
+    def rescale(self, scale: float):
+        """
+        Rescales the polygon by a given factor.
+
+        Args:
+            scale (float): The scaling factor.
+        """
+
+        self.vertices = self.vertices * scale
 
 
 ################# helpers ####
@@ -95,6 +122,114 @@ def filter_moving_trajectories(
     return all_moving_non_stationary
 
 
+################# trajectory prediction ####
+
+
+def single_trajectory_to_dataset_horizon_non_sampled(
+    t_id: str, trajectory: np.ndarray, window_size: int, sampling_rate_window: int
+) -> tuple[np.ndarray, list[np.ndarray], list[tuple[str, int, int]]]:
+    X = []
+    y = []
+    metadata: list[tuple[str, int, int]] = []
+    real_window_size = window_size * sampling_rate_window
+    real_one_step = 1 * sampling_rate_window
+
+    for i in range(
+        0, trajectory.shape[0] - max(real_window_size + real_one_step - 1, 0)
+    ):
+        history = trajectory[i : (i + real_window_size) : sampling_rate_window]
+        assert history.shape[0] == window_size
+
+        future_slice = trajectory[(i + (window_size - 1) * sampling_rate_window) :]
+        X.append(history)
+        y.append(future_slice)
+        metadata.append((t_id, i, 0))  # type: ignore
+
+    return np.stack(X, axis=0), y, metadata
+
+
+def trajectories_to_dataset_horizon(
+    trajectories: list[tuple[str, np.ndarray]],
+    window_size: int,
+    sampling_rate_window: int,
+) -> tuple[np.ndarray, list[np.ndarray], list[tuple[str, int, int]]]:
+    X = []
+    y = []
+    metadata: list[tuple[str, int, int]] = []
+    for trajectory in trajectories:
+        t_id, traj = trajectory
+        X_traj, y_traj, metadata_traj = (
+            single_trajectory_to_dataset_horizon_non_sampled(
+                t_id, traj, window_size, sampling_rate_window
+            )
+        )
+        X.append(X_traj)
+        y.extend(y_traj)
+        metadata.extend(metadata_traj)
+    return np.concatenate(X, axis=0), y, metadata
+
+
+def calc_rescale(h, w, target):
+    if h > w:
+        return target / h
+    else:
+        return target / w
+
+
+class SampledHorizonDataset(Dataset):
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: list[np.ndarray],
+        distribution: Literal["linear", "uniform", "mixture_uniform"] = "linear",
+        bin_size_mixture: None | int = None,
+        return_index=False,
+    ):
+        self.X = X
+        self.y = y
+        self.distribution = distribution
+        self.bin_size_mixture = bin_size_mixture
+        self.return_index = return_index
+
+    def __len__(self):
+        return self.X.shape[0]
+
+    def __getitem__(self, idx):
+        x: np.ndarray = self.X[idx]
+        y: np.ndarray = self.y[idx]
+        len_y = y.shape[0]
+        if self.distribution == "linear":
+            # sample from y
+            # with a linear decrasing density
+            # so density is: 2/(len(y) ** 2) * (len(y) - x)
+
+            # via inverse transform sampling
+            u = np.random.uniform(0, 1)
+            # inverse of cdf is len(y) - sqrt(1 - u) * len(y)
+            continous_sample_idx = len_y - math.sqrt(1 - u) * len_y
+            assert continous_sample_idx >= 0 and continous_sample_idx <= len_y
+            sample_idx = math.floor(continous_sample_idx)
+        elif self.distribution == "uniform":
+            sample_idx = np.random.randint(0, len_y)
+        elif self.distribution == "mixture_uniform":
+            assert self.bin_size_mixture is not None
+            sample_idx_uniform_length = np.random.randint(0, len_y)
+            sample_idx_uniform_first_bin = np.random.randint(
+                0, min(self.bin_size_mixture, len_y)
+            )
+            # choose between the two with equal probability
+            if np.random.uniform(0, 1) < 0.5:
+                sample_idx = sample_idx_uniform_length
+            else:
+                sample_idx = sample_idx_uniform_first_bin
+        else:
+            raise ValueError("Unknown distribution")
+        if not self.return_index:
+            return x, y[sample_idx]
+        else:
+            return x, y[sample_idx], sample_idx
+
+
 ################# dataset ####
 
 
@@ -127,6 +262,9 @@ class ConstrainedStanfordDroneDataset:
         dequantized: bool = True,
         filter_moving: bool = True,
         download=True,
+        rescale_coordinates: Union[
+            bool, int
+        ] = True,  # rescales the longer axis to 10 (or the value if integer)
     ):
         self.img_id = img_id
         self.constraint_classes = constraint_classes
@@ -143,6 +281,17 @@ class ConstrainedStanfordDroneDataset:
         with open(f"{sdd_data_path}/all_images.pkl", "rb") as f:
             self.all_images = pickle.load(f)
         self.image = self.all_images[img_id]
+
+        self.rescale_coordinates = rescale_coordinates
+
+        if type(rescale_coordinates) is int:
+            self.scale = calc_rescale(
+                self.image.shape[0], self.image.shape[1], rescale_coordinates
+            )
+        elif rescale_coordinates:
+            self.scale = calc_rescale(self.image.shape[0], self.image.shape[1], 10)
+        else:
+            self.scale = 1
 
         self.dequantized = dequantized
         if self.dequantized:
@@ -164,6 +313,9 @@ class ConstrainedStanfordDroneDataset:
             self.all_polygons = pickle.load(f)
         self.polygons = self.all_polygons[img_id]
 
+    def get_scale(self):
+        return self.scale
+
     def get_image(self):
         return self.image
 
@@ -182,6 +334,11 @@ class ConstrainedStanfordDroneDataset:
     def get_dataset(
         self,
     ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+        """ "
+        Returns the dataset as a tuple of three lists: train, validation and
+        test. It returns the dataset as a list of tuples, where each tuple
+        contains the trajectories in it's "raw" form, so as a list of points.
+        """
         trajectories = list(self.get_trajectories().items())
         # Define the split percentages
         train_size = 0.7
@@ -192,7 +349,7 @@ class ConstrainedStanfordDroneDataset:
         train_trajectories, remaining_trajectories = train_test_split(
             trajectories, train_size=train_size, random_state=42
         )
-        train_trajectories = train_trajectories
+        train_trajectories: list[tuple[int, np.ndarray]]
 
         # Second split: validation and test
         val_trajectories, test_trajectories = train_test_split(
@@ -200,25 +357,178 @@ class ConstrainedStanfordDroneDataset:
             test_size=test_size / (val_size + test_size),
             random_state=42,
         )
-        val_trajectories = val_trajectories
-        test_trajectories = test_trajectories
+        val_trajectories: list[tuple[int, np.ndarray]]
+        test_trajectories: list[tuple[int, np.ndarray]]
 
-        return train_trajectories, val_trajectories, test_trajectories
+        # Rescale the trajectories
+        train_data = []
+        for t_id, traj in train_trajectories:
+            train_data.append(traj * self.scale)
 
-    def get_ineqs(self) -> DNF:
+        val_data = []
+        for t_id, traj in val_trajectories:
+            val_data.append(traj * self.scale)
+
+        test_data = []
+        for t_id, traj in test_trajectories:
+            test_data.append(traj * self.scale)
+
+        return train_data, val_data, test_data
+
+    def get_trajectory_prediction_dataset(
+        self,
+        window_size: int,
+        sampling_rate: int,
+        predict_horizon_samples: int = 10,
+    ):
+        trajectories = list(self.get_trajectories().items())
+
+        min_length = (1 + window_size) * sampling_rate
+        trajectories: list[tuple[str, np.ndarray]] = [
+            (t_id, traj) for t_id, traj in trajectories if traj.shape[0] >= min_length
+        ]
+
+        # Define the split percentages
+        train_size = 0.7
+        val_size = 0.15
+        test_size = 0.15
+
+        # First split: training and remaining (validation + test)
+        train_trajectories, remaining_trajectories = train_test_split(
+            trajectories, train_size=train_size, random_state=42
+        )
+
+        # Second split: validation and test
+        val_trajectories, test_trajectories = train_test_split(
+            remaining_trajectories,
+            test_size=test_size / (val_size + test_size),
+            random_state=42,
+        )
+
+        horizon_distribution = "mixture_uniform"
+
+        # Convert trajectories to datasets
+        X_train, y_train, metadata_train = trajectories_to_dataset_horizon(
+            train_trajectories, window_size, sampling_rate
+        )
+        self.metadata_train = metadata_train
+
+        X_val, y_val, metadata_val = trajectories_to_dataset_horizon(
+            val_trajectories, window_size, sampling_rate
+        )
+
+        X_test, y_test, metadata_test = trajectories_to_dataset_horizon(
+            test_trajectories, window_size, sampling_rate
+        )
+
+        X_train = torch.tensor(X_train).to(torch.float32)
+        y_train = [torch.tensor(y).to(torch.float32) * self.scale for y in y_train]
+        X_val = torch.tensor(X_val).to(torch.float32) * self.scale
+        y_val = [torch.tensor(y).to(torch.float32) * self.scale for y in y_val]
+        X_test = torch.tensor(X_test).to(torch.float32) * self.scale
+        y_test = [torch.tensor(y).to(torch.float32) * self.scale for y in y_test]
+
+        X_train = X_train.reshape(-1, window_size * 2)
+        X_val = X_val.reshape(-1, window_size * 2)
+        X_test = X_test.reshape(-1, window_size * 2)
+
+        X_train_np = X_train.numpy()
+        y_train_np = [y.numpy() for y in y_train]
+
+        X_val_np = X_val.numpy()
+        y_val_np = [y.numpy() for y in y_val]
+
+        X_test_np = X_test.numpy()
+        y_test_np = [y.numpy() for y in y_test]
+
+        assert horizon_distribution != "exponential", "Not implemented yet"
+
+        train_dataset = SampledHorizonDataset(
+            X_train_np,
+            y_train_np,
+            distribution=horizon_distribution,
+            bin_size_mixture=sampling_rate,
+        )
+
+        val_dataset_sampler = SampledHorizonDataset(
+            X_val_np,
+            y_val_np,
+            distribution=horizon_distribution,
+            bin_size_mixture=sampling_rate,
+            return_index=True,
+        )
+
+        # set_seed
+        np.random.seed(42)
+
+        final_metadata_val = []
+        final_val_X = []
+        final_val_y = []
+        for i in range(len(val_dataset_sampler)):
+            for _ in range(predict_horizon_samples):
+                x, y, idx = val_dataset_sampler[i]
+                final_val_X.append(x)
+                final_val_y.append(y)
+                (t_id, idx_window, _) = metadata_val[i]
+                final_metadata_val.append((t_id, idx_window, idx))
+        self.metadata_val = final_metadata_val
+
+        final_val_X_np = np.stack(final_val_X, axis=0)
+        final_val_y_np = np.stack(final_val_y, axis=0)
+
+        val_dataset = TensorDataset(
+            torch.tensor(final_val_X_np), torch.tensor(final_val_y_np)
+        )
+
+        test_dataset_sampler = SampledHorizonDataset(
+            X_test_np,
+            y_test_np,
+            distribution=horizon_distribution,
+            bin_size_mixture=sampling_rate,
+            return_index=True,
+        )
+
+        final_metadata_test = []
+        final_test_X = []
+        final_test_y = []
+        for i in range(len(test_dataset_sampler)):
+            for _ in range(predict_horizon_samples):
+                x, y, idx = test_dataset_sampler[i]
+                final_test_X.append(x)
+                final_test_y.append(y)
+                (t_id, idx_window, _) = metadata_test[i]
+                final_metadata_test.append((t_id, idx_window, idx))
+        self.metadata_test = final_metadata_test
+
+        final_test_X_np = np.stack(final_test_X, axis=0)
+        final_test_y_np = np.stack(final_test_y, axis=0)
+
+        test_dataset = TensorDataset(
+            torch.tensor(final_test_X_np), torch.tensor(final_test_y_np)
+        )
+
+        return train_dataset, val_dataset, test_dataset
+
+    def get_ineqs(self, do_rescale=True) -> DNF:
         raw_ineqs = self.ineqs
 
         polytopes = []
         for constraint_class in self.constraint_classes:
             for A, b in raw_ineqs[constraint_class]:
-                polytopes.append(PolytopeH(A, b))
+                p = PolytopeH(A, b)
+                if do_rescale:
+                    p.rescale(self.scale)
+                polytopes.append(p)
 
         return DNF(polytopes)
 
-    def get_polygons(self) -> list[PolygonV]:
+    def get_polygons(self, do_rescale=True) -> list[PolytopeV]:
         all_polygons = self.polygons
         polygons = []
         for constraint_class in self.constraint_classes:
             for vertices in all_polygons[constraint_class]:
-                polygons.append(PolygonV(np.array(vertices)))
+                p = PolytopeV(np.array(vertices))
+                if do_rescale:
+                    p.rescale(self.scale)
+                polygons.append(p)
         return polygons

@@ -18,6 +18,13 @@ folder = "data/sdd"
 sdd = csdd.ConstrainedStanfordDroneDataset(0, sdd_data_path=folder, download=True)
 train, val, test = sdd.get_dataset()
 ```
+this creates a dataset with a list of trajectories in train/val/test, e.g. useful for position prediction.
+
+You can also create the trajectory-prediction task via:
+```python
+train, val, test = sdd.get_trajectory_prediction_dataset(window_size, sampling_rate)
+```
+
 
 ## Citation
 

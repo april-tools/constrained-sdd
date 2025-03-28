@@ -14,3 +14,5 @@ def test_download_and_load_sdd_data():
     sdd = csdd.ConstrainedStanfordDroneDataset(0, sdd_data_path=folder, download=True)
     assert sdd.polygons is not None
     sdd.get_dataset()
+
+    sdd.get_trajectory_prediction_dataset(10, 10)
