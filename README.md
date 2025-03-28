@@ -28,7 +28,7 @@ train, val, test = sdd.get_trajectory_prediction_dataset(window_size, sampling_r
 
 ## Citation
 
-Leander Kurscheidt, Paolo Morettin, Roberto Sebastiani, Andrea Passerini, Antonio Vergari, A Probabilistic Neuro-symbolic Layer for Algebraic Constraint Satisfaction, (to appear)
+Leander Kurscheidt, Paolo Morettin, Roberto Sebastiani, Andrea Passerini, Antonio Vergari, A Probabilistic Neuro-symbolic Layer for Algebraic Constraint Satisfaction, arXiv:2503.19466
 
 ## Examples
 
