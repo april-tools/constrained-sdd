@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="constrained-sdd",  # Replace with your package name
-    version="0.1.0",  # Update version as needed
+    name="constrained-sdd",
+    version="0.1.1",  # Update version as needed
     author="Leander Kurscheidt",
     description="A Python package for working with constrained Stanford Drone Dataset.",
     long_description=open("README.md").read(),
@@ -14,6 +14,7 @@ setup(
         "scikit-learn>=1.6.1",
         "pytest>=8.3.5",
         "requests>=2.32.3",
+        "torch>=2.6.0",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
