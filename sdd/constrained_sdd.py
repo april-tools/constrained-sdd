@@ -80,7 +80,6 @@ class PolytopeV:
 
 ################# helpers ####
 
-
 def filter_moving_trajectories(
     trajectories: dict[str, np.ndarray],
     threshold_variance: float = 20,
@@ -177,6 +176,10 @@ def calc_rescale(h, w, target):
 
 
 class SampledHorizonDataset(Dataset):
+    """
+    Dataset for trajectory prediction with sampled horizon (y) during training.
+    The dataset is sampled from the horizon (y) with a given distribution.
+    """
     def __init__(
         self,
         X: np.ndarray,
@@ -230,8 +233,27 @@ class SampledHorizonDataset(Dataset):
             return x, y[sample_idx], sample_idx
 
 
-################# dataset ####
+def load_sdd_trajectories_from_file(
+    file_path: str, sampled_horizon_kwargs: dict = {}
+) -> tuple[SampledHorizonDataset, Dataset, Dataset]:
+    with open(file_path, "rb") as f:
+        data_trajectories = pickle.load(f)
+    train_data = data_trajectories["train"]
+    val_data = data_trajectories["val"]
+    test_data = data_trajectories["test"]
 
+    train_dataset = SampledHorizonDataset(
+        train_data[0],
+        train_data[1],
+        **sampled_horizon_kwargs,
+    )
+
+    val_dataset = TensorDataset(torch.tensor(val_data[0]), torch.tensor(val_data[1]))
+    test_dataset = TensorDataset(torch.tensor(test_data[0]), torch.tensor(test_data[1]))
+    return train_dataset, val_dataset, test_dataset
+
+
+################# dataset ####
 
 def download_sdd_data(folder: str = "data/sdd"):
     # download github release
@@ -377,10 +399,67 @@ class ConstrainedStanfordDroneDataset:
 
     def get_trajectory_prediction_dataset(
         self,
-        window_size: int,
-        sampling_rate: int,
+        window_size: int = 5,
+        sampling_rate: int = 70,
         predict_horizon_samples: int = 10,
-    ):
+    ) -> tuple[SampledHorizonDataset, Dataset, Dataset]:
+        """
+        Generates trajectory prediction datasets for training, validation, and testing.
+
+        This method processes trajectory data to create datasets suitable for trajectory
+        prediction tasks. It supports a specific configuration for precomputed datasets
+        and dynamically generates datasets for other configurations.
+
+        Args:
+            window_size (int, optional): The size of the observation window in terms of
+                the number of samples. Defaults to 5.
+            sampling_rate (int, optional): The sampling rate for trajectory data.
+                Defaults to 70.
+            predict_horizon_samples (int, optional): The number of prediction horizon
+                samples. Defaults to 10.
+
+        Returns:
+            tuple[SampledHorizonDataset, Dataset, Dataset]: A tuple containing the training,
+                validation, and testing datasets. The training dataset is a
+                `SampledHorizonDataset`, while the validation and testing datasets are
+                `TensorDataset` objects.
+
+        Raises:
+            AssertionError: If the horizon distribution is set to "exponential", which is
+                not implemented.
+
+        Notes:
+            - If the configuration matches the predefined "paper configuration", the method
+              loads precomputed datasets from files.
+            - For other configurations, the method dynamically splits the trajectory data
+              into training, validation, and testing sets, and processes them into the
+              required format.
+            - Metadata for validation and testing datasets is stored in `self.metadata_val`
+              and `self.metadata_test`, respectively.
+        """
+        is_paper_config = window_size == 5 and sampling_rate == 70
+        is_paper_config = is_paper_config and self.img_id in [2, 12]
+        is_paper_config = is_paper_config and self.dequantized and self.filter_moving
+        # rescale_coordinates is bool and true
+        is_paper_config = is_paper_config and (
+            isinstance(self.rescale_coordinates, bool) and self.rescale_coordinates
+        )
+        is_paper_config = is_paper_config and predict_horizon_samples == 10
+        if is_paper_config:
+            paths = {
+                2: f"{self.sdd_data_path}/static_dataset/sdd_dataset_2.pkl",
+                12: f"{self.sdd_data_path}/static_dataset/sdd_dataset_12.pkl",
+            }
+            path = paths[self.img_id]
+            sampled_horizon_kwargs = {
+                "distribution": "mixture_uniform",
+                "bin_size_mixture": sampling_rate,
+            }
+            train, val, test = load_sdd_trajectories_from_file(
+                path, sampled_horizon_kwargs
+            )
+            return train, val, test
+
         trajectories = list(self.get_trajectories().items())
 
         min_length = (1 + window_size) * sampling_rate
