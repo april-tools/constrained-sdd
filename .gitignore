@@ -4,3 +4,4 @@ sdd/__pycache__
 tests/__pycache__
 constrained_sdd.egg-info
 dist
+build
