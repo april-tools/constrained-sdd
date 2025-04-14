@@ -596,6 +596,9 @@ class ConstrainedStanfordDroneDataset:
 
         polytopes = []
         for constraint_class in self.constraint_classes:
+            if constraint_class not in raw_ineqs:
+                # no constraints of this class
+                continue
             for A, b in raw_ineqs[constraint_class]:
                 p = PolytopeH(A, b)
                 if do_rescale:
@@ -612,6 +615,9 @@ class ConstrainedStanfordDroneDataset:
         all_polygons = self.polygons
         polygons = []
         for constraint_class in self.constraint_classes:
+            if constraint_class not in all_polygons:
+                # no obstacles of this class
+                continue
             for vertices in all_polygons[constraint_class]:
                 p = PolytopeV(np.array(vertices))
                 if do_rescale:
