@@ -589,6 +589,9 @@ class ConstrainedStanfordDroneDataset:
         return train_dataset, val_dataset, test_dataset
 
     def get_ineqs(self, do_rescale=True) -> DNF:
+        """
+        Returns the inequalities describing the (active) constraints.
+        """
         raw_ineqs = self.ineqs
 
         polytopes = []
@@ -602,6 +605,10 @@ class ConstrainedStanfordDroneDataset:
         return DNF(polytopes)
 
     def get_polygons(self, do_rescale=True) -> list[PolytopeV]:
+        """
+        Returns the polygons in vertex-form describing the
+        (active) constraints.
+        """
         all_polygons = self.polygons
         polygons = []
         for constraint_class in self.constraint_classes:
