@@ -245,6 +245,8 @@ def load_sdd_trajectories_from_file(
     test_data = data_trajectories["test"]
     metadata = data_trajectories["metadata"]
 
+    raw_trajectories = data_trajectories["raw_trajectories"]
+
     train_dataset = SampledHorizonDataset(
         train_data[0],
         train_data[1],
@@ -253,7 +255,7 @@ def load_sdd_trajectories_from_file(
 
     val_dataset = TensorDataset(torch.tensor(val_data[0]), torch.tensor(val_data[1]))
     test_dataset = TensorDataset(torch.tensor(test_data[0]), torch.tensor(test_data[1]))
-    return train_dataset, val_dataset, test_dataset, metadata
+    return train_dataset, val_dataset, test_dataset, metadata, raw_trajectories
 
 
 ################# dataset ####
@@ -277,6 +279,45 @@ def download_sdd_data(folder: str = "data/sdd"):
     for f in os.listdir(f"{folder}/sdd"):
         shutil.move(f"{folder}/sdd/{f}", f"{folder}/{f}")
     os.rmdir(f"{folder}/sdd")
+
+
+class FullHorizonDataset():
+    """
+    Dataset for the trajectory prediction that returns the
+    full horizon (y) for every (x). This means the length of
+    (y) is not fixed but depends on the position of (x) in the trajectory.
+
+    It is very inefficient but useful for debugging/visualization.
+    """
+    def __init__(self,
+                 trajectories: dict[int, np.ndarray],
+                 metadata: list[tuple[int, int, int]],
+                 window_size: int,
+                 sampling_rate: int,
+                 ):
+        self.trajectories = trajectories
+        self.metadata = metadata
+        self.window_size = window_size
+        self.sampling_rate = sampling_rate
+
+    def __len__(self):
+        return len(self.trajectories)
+
+    def get_horizon(self, idx, with_metadata=False):
+        (test_t_id, pos, _) = self.metadata[idx]
+        traj = self.trajectories[test_t_id]
+        real_window_size = self.window_size * self.sampling_rate
+
+        history = traj[pos:(pos + real_window_size):self.sampling_rate]
+        y_future = traj[(pos + (self.window_size - 1) * self.sampling_rate):]
+
+        if with_metadata:
+            return history, y_future, self.metadata[idx]
+        else:
+            return history, y_future
+
+    def __getitem__(self, idx):
+        return self.get_horizon(idx, with_metadata=False)
 
 
 class ConstrainedStanfordDroneDataset:
@@ -459,14 +500,18 @@ class ConstrainedStanfordDroneDataset:
                 "distribution": "mixture_uniform",
                 "bin_size_mixture": sampling_rate,
             }
-            train, val, test, metadata = load_sdd_trajectories_from_file(
+            train, val, test, metadata, raw_trajectories = load_sdd_trajectories_from_file(
                 path, sampled_horizon_kwargs
             )
 
             self.metadata_train = metadata["train"]
             self.metadata_val = metadata["val"]
             self.metadata_test = metadata["test"]
-            
+
+            self.train_trajectories = raw_trajectories["train"]
+            self.val_trajectories = raw_trajectories["val"]
+            self.test_trajectories = raw_trajectories["test"]
+
             return train, val, test
 
         trajectories = list(self.get_trajectories().items())
@@ -485,6 +530,7 @@ class ConstrainedStanfordDroneDataset:
         train_trajectories, remaining_trajectories = train_test_split(
             trajectories, train_size=train_size, random_state=42
         )
+        self.train_trajectories = train_trajectories
 
         # Second split: validation and test
         val_trajectories, test_trajectories = train_test_split(
@@ -492,6 +538,8 @@ class ConstrainedStanfordDroneDataset:
             test_size=test_size / (val_size + test_size),
             random_state=42,
         )
+        self.val_trajectories = val_trajectories
+        self.test_trajectories = test_trajectories
 
         horizon_distribution = "mixture_uniform"
 
@@ -593,6 +641,68 @@ class ConstrainedStanfordDroneDataset:
 
         test_dataset = TensorDataset(
             torch.tensor(final_test_X_np), torch.tensor(final_test_y_np)
+        )
+
+        return train_dataset, val_dataset, test_dataset
+
+    def get_trajectories_prediction_full_horizon(
+            self,
+            window_size: int = 5,
+            sampling_rate: int = 70,
+            scaled: bool = True,
+            ) -> tuple[
+                FullHorizonDataset,
+                FullHorizonDataset,
+                FullHorizonDataset
+                ]:
+        """
+        Returns the full horizon dataset for training, validation and test.
+        The full horizon dataset is a dataset where the full future is
+        returned for every (x) in the dataset. This is useful for debugging
+        and visualization, although it is not efficient.
+        """
+        # check if metadata_test is set
+        if not hasattr(self, "metadata_test"):
+            raise ValueError("""Metadata not set.
+                             Call get_trajectory_prediction_dataset first.""")
+
+        train_trajectories = {}
+        for t_id, traj in self.train_trajectories:
+            if scaled:
+                train_trajectories[t_id] = traj * self.scale
+            else:
+                train_trajectories[t_id] = traj
+        train_dataset = FullHorizonDataset(
+            trajectories=train_trajectories,
+            metadata=self.metadata_train,
+            window_size=window_size,
+            sampling_rate=sampling_rate,
+        )
+
+        val_trajectories = {}
+        for t_id, traj in self.val_trajectories:
+            if scaled:
+                val_trajectories[t_id] = traj * self.scale
+            else:
+                val_trajectories[t_id] = traj
+        val_dataset = FullHorizonDataset(
+            trajectories=val_trajectories,
+            metadata=self.metadata_val,
+            window_size=window_size,
+            sampling_rate=sampling_rate,
+        )
+
+        test_trajectories = {}
+        for t_id, traj in self.test_trajectories:
+            if scaled:
+                test_trajectories[t_id] = traj * self.scale
+            else:
+                test_trajectories[t_id] = traj
+        test_dataset = FullHorizonDataset(
+            trajectories=test_trajectories,
+            metadata=self.metadata_test,
+            window_size=window_size,
+            sampling_rate=sampling_rate,
         )
 
         return train_dataset, val_dataset, test_dataset
