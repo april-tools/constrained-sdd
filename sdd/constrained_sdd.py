@@ -80,6 +80,7 @@ class PolytopeV:
 
 ################# helpers ####
 
+
 def filter_moving_trajectories(
     trajectories: dict[str, np.ndarray],
     threshold_variance: float = 20,
@@ -180,6 +181,7 @@ class SampledHorizonDataset(Dataset):
     Dataset for trajectory prediction with sampled horizon (y) during training.
     The dataset is sampled from the horizon (y) with a given distribution.
     """
+
     def __init__(
         self,
         X: np.ndarray,
@@ -241,6 +243,7 @@ def load_sdd_trajectories_from_file(
     train_data = data_trajectories["train"]
     val_data = data_trajectories["val"]
     test_data = data_trajectories["test"]
+    metadata = data_trajectories["metadata"]
 
     train_dataset = SampledHorizonDataset(
         train_data[0],
@@ -250,10 +253,11 @@ def load_sdd_trajectories_from_file(
 
     val_dataset = TensorDataset(torch.tensor(val_data[0]), torch.tensor(val_data[1]))
     test_dataset = TensorDataset(torch.tensor(test_data[0]), torch.tensor(test_data[1]))
-    return train_dataset, val_dataset, test_dataset
+    return train_dataset, val_dataset, test_dataset, metadata
 
 
 ################# dataset ####
+
 
 def download_sdd_data(folder: str = "data/sdd"):
     # download github release
@@ -455,9 +459,14 @@ class ConstrainedStanfordDroneDataset:
                 "distribution": "mixture_uniform",
                 "bin_size_mixture": sampling_rate,
             }
-            train, val, test = load_sdd_trajectories_from_file(
+            train, val, test, metadata = load_sdd_trajectories_from_file(
                 path, sampled_horizon_kwargs
             )
+
+            self.metadata_train = metadata["train"]
+            self.metadata_val = metadata["val"]
+            self.metadata_test = metadata["test"]
+            
             return train, val, test
 
         trajectories = list(self.get_trajectories().items())
