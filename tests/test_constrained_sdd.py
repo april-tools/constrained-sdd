@@ -24,7 +24,7 @@ def test_download_and_load_sdd_data():
         "distribution": "mixture_uniform",
         "bin_size_mixture": 70,
     }
-    train, val, test, metadata = csdd.load_sdd_trajectories_from_file(
+    _ = csdd.load_sdd_trajectories_from_file(
         static_12_path, sampled_horizon_kwargs
     )
 
