@@ -18,7 +18,7 @@ def test_download_and_load_sdd_data():
 
     sdd.get_trajectory_prediction_dataset(10, 10)
 
-    static_12_path = f"{sdd.sdd_data_path}/static_dataset/sdd_dataset_12.pkl"
+    static_12_path = f"{sdd.sdd_data_path}/static_dataset/conditional/sdd_dataset_12.pkl"
 
     sampled_horizon_kwargs = {
         "distribution": "mixture_uniform",
@@ -60,3 +60,19 @@ def test_full_horizon():
         x_ref, _ = test[idx_test]
         assert x.shape == x_ref.shape
         assert np.allclose(x, x_ref, atol=1e-5)
+
+
+def test_unconditional_dataset():
+    folder = "data/sdd"
+    sdd = csdd.ConstrainedStanfordDroneDataset(12, sdd_data_path=folder, download=True)
+    assert sdd.polygons is not None
+
+    train_dataset, val_dataset, test_dataset = sdd.get_unconditional_dataset()
+
+    fst_train = (2.25496703, 3.55346049)
+    fst_val = (6.08073044, 5.39413177)
+    fst_test = (4.05423447, 2.25991213)
+
+    assert np.allclose(train_dataset[0], fst_train)
+    assert np.allclose(val_dataset[0], fst_val)
+    assert np.allclose(test_dataset[0], fst_test)

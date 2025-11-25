@@ -332,6 +332,7 @@ class ConstrainedStanfordDroneDataset:
         rescale_coordinates: Union[
             bool, int
         ] = True,  # rescales the longer axis to 10 (or the value if integer)
+        unconditional: bool = False,  # activates the unconditional dataset
     ):
         self.img_id = img_id
         self.constraint_classes = constraint_classes
@@ -361,14 +362,15 @@ class ConstrainedStanfordDroneDataset:
             self.scale = 1
 
         self.dequantized = dequantized
-        if self.dequantized:
-            with open(f"{sdd_data_path}/trajectories_dequantized.pkl", "rb") as f:
-                self.trajectories = pickle.load(f)
-            self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
-        else:
-            with open(f"{sdd_data_path}/trajectories.pkl", "rb") as f:
-                self.trajectories = pickle.load(f)
-            self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
+        if not unconditional:
+            if self.dequantized:
+                with open(f"{sdd_data_path}/trajectories_dequantized.pkl", "rb") as f:
+                    self.trajectories = pickle.load(f)
+                self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
+            else:
+                with open(f"{sdd_data_path}/trajectories.pkl", "rb") as f:
+                    self.trajectories = pickle.load(f)
+                self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
 
         with open(f"{sdd_data_path}/ineqs.pkl", "rb") as f:
             self.all_ineqs = pickle.load(f)
@@ -491,9 +493,13 @@ class ConstrainedStanfordDroneDataset:
         )
         is_paper_config = is_paper_config and predict_horizon_samples == 10
         if is_paper_config:
+            folder_path = f"{self.sdd_data_path}/static_dataset/conditional"
+            if not os.path.exists(folder_path):
+                # outdated dataset, raise error
+                raise ValueError("Please download the latest dataset version.")
             paths = {
-                2: f"{self.sdd_data_path}/static_dataset/sdd_dataset_2.pkl",
-                12: f"{self.sdd_data_path}/static_dataset/sdd_dataset_12.pkl",
+                2: f"{self.sdd_data_path}/static_dataset/conditional/sdd_dataset_2.pkl",
+                12: f"{self.sdd_data_path}/static_dataset/conditional/sdd_dataset_12.pkl",
             }
             path = paths[self.img_id]
             sampled_horizon_kwargs = {
@@ -703,6 +709,52 @@ class ConstrainedStanfordDroneDataset:
             metadata=self.metadata_test,
             window_size=window_size,
             sampling_rate=sampling_rate,
+        )
+
+        return train_dataset, val_dataset, test_dataset
+
+    def get_unconditional_dataset(
+        self,
+        scaled: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self.img_id in [2, 12] and self.filter_moving and self.scale:
+            folder_path = f"{self.sdd_data_path}/static_dataset/unconditional"
+            if not os.path.exists(folder_path):
+                # outdated dataset, raise error
+                raise ValueError("Please download the latest dataset version.")
+            paths = {
+                2: f"{folder_path}/training_data_marginal_2.pkl",
+                12: f"{folder_path}/training_data_marginal_12.npy",
+            }
+            all_data = np.load(f"{paths[self.img_id]}")
+        else:
+            # original code
+            # trajectories = list(problem_img_id.trajectories.items())
+            # all_moving_trajectories = list(filter_moving_trajectories(dict(trajectories),).items())
+
+            # new code
+            trajectories = list(self.get_trajectories().items())
+
+            all_data = np.concatenate([t for _, t in trajectories if t.shape[0] > 50])
+
+            if scaled:
+                all_data = all_data * self.scale
+
+        # Define the split percentages
+        train_size = 0.7
+        val_size = 0.15
+        test_size = 0.15
+
+        # First split: training and remaining (validation + test)
+        train_dataset, remaining_dataset = train_test_split(
+            all_data, train_size=train_size, random_state=42
+        )
+
+        # Second split: validation and test
+        val_dataset, test_dataset = train_test_split(
+            remaining_dataset,
+            test_size=test_size / (val_size + test_size),
+            random_state=42,
         )
 
         return train_dataset, val_dataset, test_dataset

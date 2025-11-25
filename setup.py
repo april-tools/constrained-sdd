@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="constrained-sdd",
-    version="0.1.5",  # Update version as needed
+    version="0.1.6",  # Update version as needed
     author="Leander Kurscheidt",
     description="A Python package for working with constrained Stanford Drone Dataset.",
     long_description=open("README.md").read(),
