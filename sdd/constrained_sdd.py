@@ -563,7 +563,7 @@ class ConstrainedStanfordDroneDataset:
             test_trajectories, window_size, sampling_rate
         )
 
-        X_train = torch.tensor(X_train).to(torch.float32)
+        X_train = torch.tensor(X_train).to(torch.float32) * self.scale
         y_train = [torch.tensor(y).to(torch.float32) * self.scale for y in y_train]
         X_val = torch.tensor(X_val).to(torch.float32) * self.scale
         y_val = [torch.tensor(y).to(torch.float32) * self.scale for y in y_val]
