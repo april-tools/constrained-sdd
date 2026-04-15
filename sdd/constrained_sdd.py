@@ -82,11 +82,11 @@ class PolytopeV:
 
 
 def filter_moving_trajectories(
-    trajectories: dict[str, np.ndarray],
+    trajectories: dict[int, np.ndarray],
     threshold_variance: float = 20,
     threshold_speed: float = 0.1,
     speed_window: int = 10,
-) -> dict[str, np.ndarray]:
+) -> dict[int, np.ndarray]:
     """
     Returns the trajectories that are moving, so trajectories that travel from its mean
     and with elements that have a speed greater than a threshold.
@@ -320,6 +320,85 @@ class FullHorizonDataset():
         return self.get_horizon(idx, with_metadata=False)
 
 
+def load_images(folder: str) -> dict[int, np.ndarray]:
+    with open(f"{folder}/all_images.pkl", "rb") as f:
+        all_images = pickle.load(f)
+    return all_images
+
+
+def load_trajectories(
+    folder: str, dequantized: bool = True
+) -> dict[int, dict[int, np.ndarray]]:
+    if dequantized:
+        with open(f"{folder}/trajectories_dequantized.pkl", "rb") as f:
+            all_trajectories = pickle.load(f)
+    else:
+        with open(f"{folder}/trajectories.pkl", "rb") as f:
+            all_trajectories = pickle.load(f)
+    all_trajectories = {
+        img_id: {
+            int(t_id): traj for t_id, traj in trajectories.items()
+        }  # it's np.int64 but we want int
+        for img_id, trajectories in all_trajectories.items()
+    }
+    return all_trajectories
+
+
+def load_ineqs(
+    folder: str,
+) -> dict[int, dict[str, list[tuple[np.ndarray, np.ndarray]]]]:
+    with open(f"{folder}/ineqs.pkl", "rb") as f:
+        ineqs = pickle.load(f)
+    return ineqs
+
+
+def load_polygons(
+    folder: str,
+) -> dict[int, dict[str, list[np.ndarray]]]:
+    with open(f"{folder}/polygons.pkl", "rb") as f:
+        polygons = pickle.load(f)
+    return polygons
+
+
+def ineqs_to_DNF(
+        ineqs: dict[str, list[tuple[np.ndarray, np.ndarray]]],
+        constraint_classes: list[str],
+        rescale: float | None = None,
+) -> DNF:
+    raw_ineqs = ineqs
+
+    polytopes = []
+    for constraint_class in constraint_classes:
+        if constraint_class not in raw_ineqs:
+            # no constraints of this class
+            continue
+        for A, b in raw_ineqs[constraint_class]:
+            p = PolytopeH(A, b)
+            if rescale is not None:
+                p.rescale(rescale)
+            polytopes.append(p)
+
+    return DNF(polytopes)
+
+
+def polygons_to_PolytopeV(
+        polygons: dict[str, list[np.ndarray]],
+        constraint_classes: list[str],
+        rescale: float | None = None,
+) -> list[PolytopeV]:
+    final_polygons = []
+    for constraint_class in constraint_classes:
+        if constraint_class not in polygons:
+            # no obstacles of this class
+            continue
+        for vertices in polygons[constraint_class]:
+            p = PolytopeV(np.array(vertices))
+            if rescale is not None:
+                p.rescale(rescale)
+            final_polygons.append(p)
+    return final_polygons
+
+
 class ConstrainedStanfordDroneDataset:
     def __init__(
         self,
@@ -346,8 +425,8 @@ class ConstrainedStanfordDroneDataset:
                 print("Downloading SDD data")
                 download_sdd_data(sdd_data_path)
 
-        with open(f"{sdd_data_path}/all_images.pkl", "rb") as f:
-            self.all_images = pickle.load(f)
+        self.all_images = load_images(sdd_data_path)
+
         self.image = self.all_images[img_id]
 
         self.rescale_coordinates = rescale_coordinates
@@ -363,23 +442,15 @@ class ConstrainedStanfordDroneDataset:
 
         self.dequantized = dequantized
         if not unconditional:
-            if self.dequantized:
-                with open(f"{sdd_data_path}/trajectories_dequantized.pkl", "rb") as f:
-                    self.trajectories = pickle.load(f)
-                self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
-            else:
-                with open(f"{sdd_data_path}/trajectories.pkl", "rb") as f:
-                    self.trajectories = pickle.load(f)
-                self.trajectories: dict[str, np.ndarray] = self.trajectories[img_id]
+            all_trajectories = load_trajectories(sdd_data_path, dequantized)
+            self.trajectories: dict[int, np.ndarray] = all_trajectories[img_id]
 
-        with open(f"{sdd_data_path}/ineqs.pkl", "rb") as f:
-            self.all_ineqs = pickle.load(f)
+        self.all_ineqs = load_ineqs(sdd_data_path)
         self.ineqs: dict[str, list[tuple[np.ndarray, np.ndarray]]] = self.all_ineqs[
             img_id
         ]
 
-        with open(f"{sdd_data_path}/polygons.pkl", "rb") as f:
-            self.all_polygons = pickle.load(f)
+        self.all_polygons = load_polygons(sdd_data_path)
         self.polygons = self.all_polygons[img_id]
 
     def get_scale(self):
@@ -763,35 +834,19 @@ class ConstrainedStanfordDroneDataset:
         """
         Returns the inequalities describing the (active) constraints.
         """
-        raw_ineqs = self.ineqs
-
-        polytopes = []
-        for constraint_class in self.constraint_classes:
-            if constraint_class not in raw_ineqs:
-                # no constraints of this class
-                continue
-            for A, b in raw_ineqs[constraint_class]:
-                p = PolytopeH(A, b)
-                if do_rescale:
-                    p.rescale(self.scale)
-                polytopes.append(p)
-
-        return DNF(polytopes)
+        if do_rescale and self.scale != 1:
+            scale = self.scale
+        else:
+            scale = None
+        return ineqs_to_DNF(self.ineqs, self.constraint_classes, rescale=scale)
 
     def get_polygons(self, do_rescale=True) -> list[PolytopeV]:
         """
         Returns the polygons in vertex-form describing the
         (active) constraints.
         """
-        all_polygons = self.polygons
-        polygons = []
-        for constraint_class in self.constraint_classes:
-            if constraint_class not in all_polygons:
-                # no obstacles of this class
-                continue
-            for vertices in all_polygons[constraint_class]:
-                p = PolytopeV(np.array(vertices))
-                if do_rescale:
-                    p.rescale(self.scale)
-                polygons.append(p)
-        return polygons
+        if do_rescale and self.scale != 1:
+            scale = self.scale
+        else:
+            scale = None
+        return polygons_to_PolytopeV(self.polygons, self.constraint_classes, rescale=scale)
