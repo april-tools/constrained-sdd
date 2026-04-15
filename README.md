@@ -46,3 +46,12 @@ We annotate the first 50 pictures (scenes in the original dataset) with trajecto
 
 [1]  A. Robicquet, A. Sadeghian, A. Alahi, S. Savarese, Learning Social Etiquette: Human Trajectory Prediction In Crowded Scenes in European Conference on Computer Vision (ECCV), 2016. 
 [2] Nachiket Deo, Mohan M. Trivedi, Trajectory Forecasts in Unknown Environments Conditioned on Grid-Based Plans, 2021
+
+# pushing a new version
+
+Pushing a new version is automated via github actions triggered via tags. It is very easy:
+
+1. increment the version number in setup.py
+2. `git tag -a v0.1.X -m "Release v0.1.X"` (adds the tag)
+3. `git push origin v0.1.8` (pushed the tag)
+4. the github action will push a new version
