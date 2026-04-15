@@ -399,6 +399,14 @@ def polygons_to_PolytopeV(
     return final_polygons
 
 
+def check_and_download_data(sdd_data_path: str):
+    if not os.path.exists(sdd_data_path):
+        os.makedirs(sdd_data_path)
+    if not os.path.exists(f"{sdd_data_path}/all_images.pkl"):
+        print("Downloading SDD data")
+        download_sdd_data(sdd_data_path)
+
+
 class ConstrainedStanfordDroneDataset:
     def __init__(
         self,
@@ -419,11 +427,7 @@ class ConstrainedStanfordDroneDataset:
         self.filter_moving = filter_moving
 
         if download:
-            if not os.path.exists(sdd_data_path):
-                os.makedirs(sdd_data_path)
-            if not os.path.exists(f"{sdd_data_path}/all_images.pkl"):
-                print("Downloading SDD data")
-                download_sdd_data(sdd_data_path)
+            check_and_download_data(sdd_data_path)
 
         self.all_images = load_images(sdd_data_path)
 
